@@ -3,49 +3,12 @@
 #include <string>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include "opcodes.h"
+#include "file_dialog.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <iostream>
-
-#ifdef __APPLE__
-#include <mach-o/dyld.h>
-#include <limits.h>
-#include <libgen.h>
-#endif
-
-static std::string resolveRomPath(const char* filename) {
-#ifdef __APPLE__
-    char exePath[PATH_MAX];
-    uint32_t size = sizeof(exePath);
-    if (_NSGetExecutablePath(exePath, &size) == 0) {
-        char buf[PATH_MAX];
-        strncpy(buf, exePath, PATH_MAX - 1);
-        buf[PATH_MAX - 1] = '\0';
-        std::string resourcePath = std::string(dirname(buf)) + "/../Resources/" + filename;
-        char resolved[PATH_MAX];
-        if (realpath(resourcePath.c_str(), resolved) != nullptr) {
-            return resolved;
-        }
-    }
-#endif
-
-    std::string resourcesPath = std::string("Resources/") + filename;
-    std::string parentResourcesPath = std::string("../Resources/") + filename;
-    const char* fallbacks[] = {
-        filename,
-        resourcesPath.c_str(),
-        parentResourcesPath.c_str(),
-    };
-    for (const char* path : fallbacks) {
-        FILE* probe = fopen(path, "rb");
-        if (probe) {
-            fclose(probe);
-            return path;
-        }
-    }
-    return filename;
-}
 
 BYTE m_GameMemory[0x1000] = {0};
 BYTE m_Registers[16] = {0};
@@ -59,19 +22,44 @@ BYTE m_DelayTimer = 0;
 BYTE m_SoundTimer = 0;
 bool m_Keys[16] = {false};
 
-void CPUReset() {
+void resetCPU() {
+    memset(m_GameMemory, 0, sizeof(m_GameMemory));
+    memset(m_Registers, 0, sizeof(m_Registers));
+    memset(m_ScreenData, 0, sizeof(m_ScreenData));
+    memset(m_Keys, 0, sizeof(m_Keys));
     m_AddressI = 0;
     m_ProgramCounter = 0x200;
-    memset(m_Registers, 0, sizeof(m_Registers)); // set all registers to 0
+    m_Stack.clear();
+    stack_pointer = 0;
+    m_DelayTimer = 0;
+    m_SoundTimer = 0;
+}
 
-    std::string romPath = resolveRomPath("INVADERS");
-    FILE* in = fopen(romPath.c_str(), "rb");
+bool loadCartridge(const std::string& path) {
+    FILE* in = fopen(path.c_str(), "rb");
     if (!in) {
-        std::cerr << "Failed to open ROM: " << romPath << std::endl;
-        exit(1);
+        std::cerr << "Failed to open ROM: " << path << std::endl;
+        return false;
     }
-    fread(&m_GameMemory[0x200], 0xfff, 1, in);
+
+    resetCPU();
+    size_t bytesRead = fread(&m_GameMemory[0x200], 1, sizeof(m_GameMemory) - 0x200, in);
     fclose(in);
+
+    if (bytesRead == 0) {
+        std::cerr << "ROM file is empty: " << path << std::endl;
+        return false;
+    }
+
+    std::cout << "Loaded ROM: " << path << " (" << bytesRead << " bytes)" << std::endl;
+    return true;
+}
+
+std::string pickRomPath(int argc, char* argv[]) {
+    if (argc > 1 && argv[1][0] != '\0') {
+        return argv[1];
+    }
+    return openRomFileDialog();
 }
 
 WORD getNextOpcode() {
@@ -140,11 +128,7 @@ void decodeOpcode() {
     }
 }
 
-int main(int argc, char* args[]) {
-    // 1. Initialize Emulator
-    CPUReset();
-    
-    // 2. Initialize SDL
+int main(int argc, char* argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         std::cerr << "SDL could not initialize! SDL_Error: " << SDL_GetError() << std::endl;
         return -1;
@@ -152,24 +136,38 @@ int main(int argc, char* args[]) {
 
     const int scale = 10;
     SDL_Window* window = SDL_CreateWindow(
-        "CHIP-8 Emulator", 
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 
+        "CHIP-8 Emulator",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         64 * scale, 32 * scale, SDL_WINDOW_SHOWN
     );
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
-    // Timing tracking
+    std::string romPath = pickRomPath(argc, argv);
+    if (romPath.empty() || !loadCartridge(romPath)) {
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return romPath.empty() ? 0 : 1;
+    }
+
     auto lastTimerTick = std::chrono::high_resolution_clock::now();
     bool quit = false;
     SDL_Event e;
 
-    // 3. Main Emulation Loop
     while (!quit) {
-        // --- INPUT HANDLING ---
         while (SDL_PollEvent(&e) != 0) {
             if (e.type == SDL_QUIT) {
                 quit = true;
-            } else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
+            } else if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_o) {
+                    std::string newRom = openRomFileDialog();
+                    if (!newRom.empty()) {
+                        loadCartridge(newRom);
+                    }
+                }
+            }
+
+            if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
                 bool isPressed = (e.type == SDL_KEYDOWN);
                 switch (e.key.keysym.sym) {
                     case SDLK_1: m_Keys[0x1] = isPressed; break;
@@ -192,31 +190,24 @@ int main(int argc, char* args[]) {
             }
         }
 
-        // --- CPU EXECUTION ---
-        // Run ~10 instructions per frame to simulate roughly 600Hz clock speed
         for (int i = 0; i < 10; ++i) {
             decodeOpcode();
         }
 
-        // --- TIMERS (60Hz) ---
         auto currentTime = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float, std::chrono::milliseconds::period>(currentTime - lastTimerTick).count();
-        
-        if (dt >= 16.67f) { // 1000ms / 60 = 16.67ms
+
+        if (dt >= 16.67f) {
             if (m_DelayTimer > 0) --m_DelayTimer;
             if (m_SoundTimer > 0) {
                 --m_SoundTimer;
-                // TODO: Insert SDL_Audio code here to play a beep
             }
             lastTimerTick = currentTime;
         }
 
-        // --- RENDERING ---
-        // Clear screen to black
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
-        // Set draw color to white for active pixels
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         for (int y = 0; y < 32; ++y) {
             for (int x = 0; x < 64; ++x) {
@@ -227,14 +218,10 @@ int main(int argc, char* args[]) {
             }
         }
 
-        // Update the window
         SDL_RenderPresent(renderer);
-
-        // Cap framerate (approx 60Hz loop)
-        SDL_Delay(16); 
+        SDL_Delay(16);
     }
 
-    // 4. Cleanup
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

@@ -11,6 +11,10 @@ endif
 
 TARGET := nano8
 SRCS := main.cpp opcodes.cpp
+ifeq ($(shell uname -s),Darwin)
+	SRCS += file_dialog.mm
+	LIBS += -framework Cocoa
+endif
 
 APP := NANO8.app
 APP_EXEC := $(APP)/Contents/MacOS/$(TARGET)
