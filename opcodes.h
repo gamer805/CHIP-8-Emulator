@@ -1,15 +1,18 @@
 #include <vector>
 
-typedef unsigned char BYTE;
-typedef unsigned short int WORD;
-extern BYTE m_GameMemory[0xFFF];
+typedef uint8_t BYTE;
+typedef uint16_t WORD;
+
+extern BYTE m_GameMemory[0x1000];
 extern BYTE m_Registers[16];
 extern WORD m_AddressI;
 extern WORD m_ProgramCounter;
 extern std::vector<WORD> m_Stack;
 extern int stack_pointer;
-
 extern BYTE m_ScreenData[64][32];
+extern BYTE m_DelayTimer;
+extern BYTE m_SoundTimer;
+extern bool m_Keys[16];
 
 void Opcode00E0(WORD opcode);
 void Opcode00EE(WORD opcode);

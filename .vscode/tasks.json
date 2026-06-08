@@ -1,0 +1,34 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cppbuild",
+            "label": "C/C++: clang++ build active file with SDL2",
+            "command": "/usr/bin/clang++",
+            "args": [
+                "-std=c++17",
+                "-fcolor-diagnostics",
+                "-g",
+                "${file}",
+                "-o",
+                "${fileDirname}/${fileBasenameNoExtension}",
+                "-I/opt/homebrew/include",
+                "-I/usr/local/include",
+                "-L/opt/homebrew/lib",
+                "-L/usr/local/lib",
+                "-lSDL2"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Custom SDL2 compiler build task"
+        }
+    ]
+}
