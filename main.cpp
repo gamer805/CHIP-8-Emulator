@@ -1,9 +1,51 @@
 #include <vector>
 #include <cstdint>
+#include <string>
+#include <cstdio>
+#include <cstdlib>
 #include "opcodes.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 #include <iostream>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <limits.h>
+#include <libgen.h>
+#endif
+
+static std::string resolveRomPath(const char* filename) {
+#ifdef __APPLE__
+    char exePath[PATH_MAX];
+    uint32_t size = sizeof(exePath);
+    if (_NSGetExecutablePath(exePath, &size) == 0) {
+        char buf[PATH_MAX];
+        strncpy(buf, exePath, PATH_MAX - 1);
+        buf[PATH_MAX - 1] = '\0';
+        std::string resourcePath = std::string(dirname(buf)) + "/../Resources/" + filename;
+        char resolved[PATH_MAX];
+        if (realpath(resourcePath.c_str(), resolved) != nullptr) {
+            return resolved;
+        }
+    }
+#endif
+
+    std::string resourcesPath = std::string("Resources/") + filename;
+    std::string parentResourcesPath = std::string("../Resources/") + filename;
+    const char* fallbacks[] = {
+        filename,
+        resourcesPath.c_str(),
+        parentResourcesPath.c_str(),
+    };
+    for (const char* path : fallbacks) {
+        FILE* probe = fopen(path, "rb");
+        if (probe) {
+            fclose(probe);
+            return path;
+        }
+    }
+    return filename;
+}
 
 BYTE m_GameMemory[0x1000] = {0};
 BYTE m_Registers[16] = {0};
@@ -22,9 +64,12 @@ void CPUReset() {
     m_ProgramCounter = 0x200;
     memset(m_Registers, 0, sizeof(m_Registers)); // set all registers to 0
 
-    // load in the game
-    FILE *in;
-    in = fopen("INVADERS", "rb");
+    std::string romPath = resolveRomPath("INVADERS");
+    FILE* in = fopen(romPath.c_str(), "rb");
+    if (!in) {
+        std::cerr << "Failed to open ROM: " << romPath << std::endl;
+        exit(1);
+    }
     fread(&m_GameMemory[0x200], 0xfff, 1, in);
     fclose(in);
 }
